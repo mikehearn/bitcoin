@@ -67,6 +67,7 @@ void Shutdown(void* parg)
     {
         fShutdown = true;
         nTransactionsUpdated++;
+        CTxDB().Close();
         bitdb.Flush(false);
         StopNode();
         bitdb.Flush(true);
@@ -698,6 +699,7 @@ bool AppInit2()
             if (file)
                 LoadExternalBlockFile(file);
         }
+        exit(0);
     }
 
     // ********************************************************* Step 9: load peers
@@ -755,4 +757,3 @@ bool AppInit2()
 
     return true;
 }
-
