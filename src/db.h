@@ -6,7 +6,6 @@
 #define BITCOIN_DB_H
 
 #include "main.h"
-#include "txdb.h"
 
 #include <map>
 #include <string>

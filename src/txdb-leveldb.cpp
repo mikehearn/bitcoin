@@ -169,56 +169,6 @@ bool CTxDB::ContainsTx(uint256 hash)
     return Exists(make_pair(string("tx"), hash));
 }
 
-bool CTxDB::ReadOwnerTxes(uint160 hash160, int nMinHeight, vector<CTransaction>& vtx)
-{
-    assert(!fClient);
-    vtx.clear();
-
-    // Owner transaction data is stored sequentially in order with entries like this:
-    //    owner<hash of tx><disk pos> = chain height
-    // Therefore, to find the owners of a given transaction hash, we scan through
-    // the keyspace starting from owner<hash of tx><0,0,0> which will select the
-    // first matching entry.
-    leveldb::Iterator *iterator = pdb->NewIterator(leveldb::ReadOptions());
-    CDataStream ssStartKey(SER_DISK, CLIENT_VERSION);
-    ssStartKey << string("owner") << hash160 << CDiskTxPos(0, 0, 0);
-    iterator->Seek(ssStartKey.str());
-
-    bool success = true;
-    while (iterator->Valid())
-    {
-        std::string strKey = iterator->key().ToString();
-        // Unpack key into component parts.
-        CDataStream ssKey(SER_DISK, CLIENT_VERSION);
-        ssKey << strKey;
-        string strType;
-        uint160 hashItem;
-        CDiskTxPos pos;
-        ssKey >> strType >> hashItem >> pos;
-        // Did we reach the end of the available data for this tx hash?
-        if (strType != "owner" || hashItem != hash160)
-            break;
-        // Deserialize the value (the height of the item).
-        CDataStream ssValue(SER_DISK, CLIENT_VERSION);
-        ssValue << iterator->value().ToString();
-        int nItemHeight;
-        ssValue >> nItemHeight;
-        // Does it match the parameters?
-        if (nItemHeight < nMinHeight)
-            continue;
-        vtx.resize(vtx.size()+1);
-        if (!vtx.back().ReadFromDisk(pos))
-        {
-            success = false;
-            break;
-        }
-        iterator->Next();
-    }
-
-    delete iterator;
-    return success;
-}
-
 bool CTxDB::ReadDiskTx(uint256 hash, CTransaction& tx, CTxIndex& txindex)
 {
     assert(!fClient);
