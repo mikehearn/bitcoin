@@ -289,6 +289,25 @@ std::string HelpMessage()
     return strUsage;
 }
 
+bool LoadBlockIndexFromDisk(std::ostringstream *errors) {
+    uiInterface.InitMessage(_("Loading block index..."));
+    printf("Loading block index...\n");
+    int64 nStart = GetTimeMillis();
+    if (!LoadBlockIndex())
+        *errors << _("Error loading block index database") << "\n";
+
+    // as LoadBlockIndex can take several minutes, it's possible the user
+    // requested to kill bitcoin-qt during the last operation. If so, exit.
+    // As the program has not fully started yet, Shutdown() is possibly overkill.
+    if (fRequestShutdown)
+    {
+        printf("Shutdown requested. Exiting.\n");
+        return false;
+    }
+    printf(" block index %15"PRI64d"ms\n", GetTimeMillis() - nStart);
+    return true;
+}
+
 /** Initialize bitcoin.
  *  @pre Parameters should be parsed and config file should be read.
  */
@@ -568,21 +587,22 @@ bool AppInit2()
         return false;
     }
 
-    uiInterface.InitMessage(_("Loading block index..."));
-    printf("Loading block index...\n");
-    nStart = GetTimeMillis();
-    if (!LoadBlockIndex())
-        strErrors << _("Error loading block index database") << "\n";
-
-    // as LoadBlockIndex can take several minutes, it's possible the user
-    // requested to kill bitcoin-qt during the last operation. If so, exit.
-    // As the program has not fully started yet, Shutdown() is possibly overkill.
-    if (fRequestShutdown)
-    {
-        printf("Shutdown requested. Exiting.\n");
+#ifdef USE_LEVELDB
+    // If there is already a blkindex.dat (and thus some block data files) this
+    // will temporarily disable signature checking and writing of blocks to disk
+    // and then begin re-scanning the blk data files into the database. The act
+    // of migrating is equivalent to a LoadBlockIndex(). Otherwise just
+    // returns false. Can throw if something goes wrong during replay.
+    if (!MaybeMigrateToLevelDB()) {
+        if (!LoadBlockIndexFromDisk(&strErrors)) {
+            return false;
+        }
+    }
+#else
+    if (!LoadBlockIndexFromDisk(&strErrors)) {
         return false;
     }
-    printf(" block index %15"PRI64d"ms\n", GetTimeMillis() - nStart);
+#endif
 
     if (GetBoolArg("-printblockindex") || GetBoolArg("-printblocktree"))
     {
@@ -700,7 +720,6 @@ bool AppInit2()
             if (file)
                 LoadExternalBlockFile(file);
         }
-        exit(0);
     }
 
     // ********************************************************* Step 9: load peers

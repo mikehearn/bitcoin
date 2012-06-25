@@ -200,4 +200,9 @@ private:
     bool LoadBlockIndexGuts();
 };
 
+// Called from the initialization code. Checks to see if there is an old
+// blkindex.dat file. If so, deletes it and begins re-importing the block
+// chain, which will create the new database.
+bool MaybeMigrateToLevelDB();
+
 #endif // BITCOIN_DB_H

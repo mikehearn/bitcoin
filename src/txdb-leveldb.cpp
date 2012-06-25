@@ -242,6 +242,11 @@ static CBlockIndex *InsertBlockIndex(uint256 hash)
 
 bool CTxDB::LoadBlockIndex()
 {
+    if (mapBlockIndex.size() > 0) {
+        // Already loaded once in this session. It can happen during migration
+        // from BDB.
+        return true;
+    }
     // The block index is an in-memory structure that maps hashes to on-disk
     // locations where the contents of the block can be found. Here, we scan it
     // out of the DB and into mapBlockIndex.
@@ -451,5 +456,75 @@ bool CTxDB::LoadBlockIndex()
         block.SetBestChain(txdb, pindexFork);
     }
 
+    return true;
+}
+
+extern bool fDisableSignatureChecking;
+
+bool MaybeMigrateToLevelDB() {
+    // Check if we have a blkindex.dat: if so, delete it. Because leveldb is
+    // more efficient (space-wise) than bdb, this should ensure we have enough
+    // disk space to perform the migration. We delete before migrate because if
+    // we got here, the code to handle the BDB based block index is not compiled
+    // in anymore, so there's no point in keeping the old file around - it's
+    // onwards and upwards.
+    //
+    // The act of replaying would normally append data to the blk data files,
+    // but we're reading from them so we don't want that. We disable it here,
+    // along with the signature checking as it doesn't help us right now. Note
+    // that replaying the chain could b0rk the wallet, but this process takes
+    // place before any wallets are registered.
+    //
+    // TODO(hearn): Assert on lack of a wallet here.
+
+    int64 nStart = GetTimeMillis();
+
+    boost::filesystem::path oldIndex = GetDataDir() / "blkindex.dat";
+    if (!boost::filesystem::exists(oldIndex)) {
+        // Nothing to do.
+        return false;
+    }
+
+    // TODO(hearn): Check we have enough disk space for migration.
+
+    printf("Deleting old blkindex.dat to make space for leveldb import.\n");
+    boost::filesystem::remove(oldIndex);
+    FILE *file;
+    int nFile = 1;
+    // We don't need to re-run scripts during migration as they were run already
+    // and this saves a lot of time.
+    fDisableSignatureChecking = true;
+    // There may be multiple blk0000?.dat files, iterate over each one, rename
+    // it and then reimport it. For the first one, we need to initialize the
+    // fresh file with the genesis block.
+    loop {
+        std::string filename = strprintf("blk%04d.dat", nFile);
+        std::string tmpname = strprintf("tmp-blk%04d.dat", nFile);
+        boost::filesystem::path blkpath = GetDataDir() / filename;
+        if (!boost::filesystem::exists(blkpath)) {
+            // No more work to do.
+            break;
+        }
+        boost::filesystem::path tmppath = GetDataDir() / tmpname;
+        boost::filesystem::rename(blkpath, tmppath);
+        printf("Migrating blk%04d.dat to leveldb\n", nFile);
+        file = fopen(tmppath.string().c_str(), "r");
+        if (nFile == 1) {
+            // This will create a fresh blk0001.dat ready for usage.
+            LoadBlockIndex();
+        }
+        // LoadExternalBlockFile will close the given input file itself.
+        // It reads each block from the storage files and calls ProcessBlock
+        // on each one, which will go back and add to the database.
+        if (!LoadExternalBlockFile(file)) {
+            // We can't really clean up elegantly here.
+            fDisableSignatureChecking = false;
+            throw new runtime_error("Failed to process external block file");
+        }
+        boost::filesystem::remove(tmppath);
+        nFile++;
+    }
+    fDisableSignatureChecking = false;
+    printf("LevelDB migration took %fs\n", (GetTimeMillis() - nStart) / 1000.0);
     return true;
 }
