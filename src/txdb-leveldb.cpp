@@ -9,25 +9,21 @@
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
 
-#include <leveldb/cache.h>
 #include <leveldb/filter_policy.h>
 
 #include "txdb.h"
 #include "util.h"
 #include "main.h"
 
-#ifndef WIN32
-#include "sys/stat.h"
-#endif
-
 using namespace std;
 using namespace boost;
 
 leveldb::DB *txdb;
 
-// NOTE: CDB subclasses are created and destroyed VERY OFTEN. Therefore we have to keep databases
-// in global variables to avoid constantly creating and destroying them, which sucks. In future
-// the code should be changed to not treat the instantiation of a database as a free operation.
+// NOTE: CDB subclasses are created and destroyed VERY OFTEN. Therefore we have
+// to keep databases in global variables to avoid constantly creating and
+// destroying them, which sucks. In future the code should be changed to not
+// treat the instantiation of a database as a free operation.
 CTxDB::CTxDB(const char* pszMode)
 {
     assert(pszMode);
@@ -43,8 +39,6 @@ CTxDB::CTxDB(const char* pszMode)
     bool fCreate = strchr(pszMode, 'c');
 
     options.create_if_missing = fCreate;
-    // Note: this makes no difference.
-    options.block_cache = leveldb::NewLRUCache(30 * 1048576);
     options.filter_policy = leveldb::NewBloomFilterPolicy(10);
     filesystem::create_directory(directory);
     printf("Opening LevelDB in %s\n", directory.string().c_str());
@@ -67,10 +61,11 @@ CTxDB::CTxDB(const char* pszMode)
 void CTxDB::Close()
 {
     delete txdb;
+    txdb = pdb = NULL;
     delete options.filter_policy;
+    options.filter_policy = NULL;
     delete activeBatch;
     activeBatch = NULL;
-    txdb = NULL;
 }
 
 bool CTxDB::TxnBegin()
@@ -118,6 +113,11 @@ public:
     }
 };
 
+// When performing a read, if we have an active batch we need to check it first
+// before reading from the database, as the rest of the code assumes that once
+// a database transaction begins reads are consistent with it. It would be good
+// to change that assumption in future and avoid the performance hit, though in
+// practice it does not appear to be large.
 bool CTxDB::ScanBatch(const CDataStream &key, string *value, bool *deleted) const {
     assert(activeBatch);
     *deleted = false;
@@ -127,7 +127,7 @@ bool CTxDB::ScanBatch(const CDataStream &key, string *value, bool *deleted) cons
     scanner.foundValue = value;
     leveldb::Status status = activeBatch->Iterate(&scanner);
     if (!status.ok()) {
-        throw runtime_error(status.ToString()); 
+        throw runtime_error(status.ToString());
     }
     return scanner.foundEntry;
 }
@@ -242,8 +242,9 @@ static CBlockIndex *InsertBlockIndex(uint256 hash)
 
 bool CTxDB::LoadBlockIndex()
 {
-    // The block index is an in-memory structure that maps hashes to on-disk locations where the
-    // contents of the block can be found. Here, we scan it out of the DB and into mapBlockIndex.
+    // The block index is an in-memory structure that maps hashes to on-disk
+    // locations where the contents of the block can be found. Here, we scan it
+    // out of the DB and into mapBlockIndex.
     leveldb::Iterator *iterator = pdb->NewIterator(leveldb::ReadOptions());
     // Seek to start key.
     CDataStream ssStartKey(SER_DISK, CLIENT_VERSION);
