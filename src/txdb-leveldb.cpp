@@ -9,6 +9,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
 
+#include <leveldb/cache.h>
 #include <leveldb/filter_policy.h>
 
 #include "txdb.h"
@@ -39,6 +40,8 @@ CTxDB::CTxDB(const char* pszMode)
     bool fCreate = strchr(pszMode, 'c');
 
     options.create_if_missing = fCreate;
+    int nCacheSizeMB = GetArg("-dbcache", 25);
+    options.block_cache = leveldb::NewLRUCache(nCacheSizeMB * 1048576);
     options.filter_policy = leveldb::NewBloomFilterPolicy(10);
     filesystem::create_directory(directory);
     printf("Opening LevelDB in %s\n", directory.string().c_str());
@@ -64,6 +67,8 @@ void CTxDB::Close()
     txdb = pdb = NULL;
     delete options.filter_policy;
     options.filter_policy = NULL;
+    delete options.block_cache;
+    options.block_cache = NULL;
     delete activeBatch;
     activeBatch = NULL;
 }
@@ -461,7 +466,25 @@ bool CTxDB::LoadBlockIndex()
 
 extern bool fDisableSignatureChecking;
 
-bool MaybeMigrateToLevelDB() {
+static uint64 nTotalBytes;
+static uint64 nTotalBytesCompleted;
+static double nProgressPercent;
+static LevelDBMigrationProgress *callbackTotalOperationProgress;
+
+void MigrationProgress(unsigned int bytesRead) {
+    // Called from inside LoadExternalBlockFile with how many bytes were
+    // processed so far.
+    nTotalBytesCompleted += bytesRead;
+    double newProgressPercent = 100.0 * ((double)nTotalBytesCompleted / (double)nTotalBytes);
+    // Throttle UI notifications.
+    if (newProgressPercent - nProgressPercent < 0.01)
+        return;
+    nProgressPercent = newProgressPercent;
+    printf("LevelDB migration %0.2f%% complete.\n", nProgressPercent);
+    (*callbackTotalOperationProgress)(nProgressPercent);
+}
+
+LevelDBMigrationResult MaybeMigrateToLevelDB(LevelDBMigrationProgress &progress) {
     // Check if we have a blkindex.dat: if so, delete it. Because leveldb is
     // more efficient (space-wise) than bdb, this should ensure we have enough
     // disk space to perform the migration. We delete before migrate because if
@@ -481,16 +504,41 @@ bool MaybeMigrateToLevelDB() {
 
     boost::filesystem::path oldIndex = GetDataDir() / "blkindex.dat";
     if (!boost::filesystem::exists(oldIndex)) {
-        // Nothing to do.
-        return false;
+        return NONE_NEEDED;
     }
 
-    // TODO(hearn): Check we have enough disk space for migration.
+    // Check we have enough disk space for migration. We need at least 2GB free
+    // to hold the blk file we are migrating, and leveldb may have transient
+    // storage spikes, so we ask for at least 3GB.
+    uint64 nFreeBytesAvailable = filesystem::space(GetDataDir()).available;
+    if (nFreeBytesAvailable < 3UL * 1024UL * 1024UL * 1024UL) {
+        return INSUFFICIENT_DISK_SPACE;
+    }
 
     printf("Deleting old blkindex.dat to make space for leveldb import.\n");
     boost::filesystem::remove(oldIndex);
     FILE *file;
     int nFile = 1;
+    // Firstly, figure out the total number of bytes we need to migrate, for
+    // the progress indicator.
+    nTotalBytes = 0;
+    loop {
+        std::string filename = strprintf("blk%04d.dat", nFile);
+        boost::filesystem::path blkpath = GetDataDir() / filename;
+        if (!boost::filesystem::exists(blkpath))
+            break;
+        uintmax_t nFileSize = boost::filesystem::file_size(blkpath);
+        if (nFileSize == static_cast<uintmax_t>(-1))   // Some other error.
+            break;
+        nTotalBytes += nFileSize;
+        nFile++;
+    }
+    nFile = 1;
+    // Set up progress calculations and callbacks.
+    callbackTotalOperationProgress = &progress;
+    ExternalBlockFileProgress callbackProgress;
+    callbackProgress.connect(MigrationProgress);
+    (*callbackTotalOperationProgress)(0.0);
     // We don't need to re-run scripts during migration as they were run already
     // and this saves a lot of time.
     fDisableSignatureChecking = true;
@@ -516,15 +564,15 @@ bool MaybeMigrateToLevelDB() {
         // LoadExternalBlockFile will close the given input file itself.
         // It reads each block from the storage files and calls ProcessBlock
         // on each one, which will go back and add to the database.
-        if (!LoadExternalBlockFile(file)) {
+        if (!LoadExternalBlockFile(file, &callbackProgress)) {
             // We can't really clean up elegantly here.
             fDisableSignatureChecking = false;
-            throw new runtime_error("Failed to process external block file");
+            return OTHER_ERROR;
         }
         boost::filesystem::remove(tmppath);
         nFile++;
     }
     fDisableSignatureChecking = false;
     printf("LevelDB migration took %fs\n", (GetTimeMillis() - nStart) / 1000.0);
-    return true;
+    return COMPLETED;
 }

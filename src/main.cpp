@@ -2086,7 +2086,7 @@ void PrintBlockTree()
     }
 }
 
-bool LoadExternalBlockFile(FILE* fileIn)
+bool LoadExternalBlockFile(FILE* fileIn, ExternalBlockFileProgress *progress)
 {
     int nLoaded = 0;
     {
@@ -2133,6 +2133,8 @@ bool LoadExternalBlockFile(FILE* fileIn)
                         nPos += 4 + nSize;
                     }
                 }
+                if (progress)
+                    (*progress)(4 + nSize);
             }
         }
         catch (std::exception &e) {
