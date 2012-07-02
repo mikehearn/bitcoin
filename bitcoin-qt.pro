@@ -73,7 +73,7 @@ contains(BITCOIN_NEED_QT_PLUGINS, 1) {
     QTPLUGIN += qcncodecs qjpcodecs qtwcodecs qkrcodecs qtaccessiblewidgets
 } 
 
-windows || contains(USE_LEVELDB, 0) {
+contains(USE_LEVELDB, -) {
     message(Building without LevelDB)
     SOURCES += src/txdb-bdb.cpp
 } else {
