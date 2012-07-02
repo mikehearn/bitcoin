@@ -6,7 +6,7 @@
 #ifndef BITCOIN_TXDB_H
 #define BITCOIN_TXDB_H
 
-// Allow switching between LevelDB and BerkelyDB here as a temp workaround for lack 
+// Allow switching between LevelDB and BerkelyDB here as a temp workaround for lack
 // of an up to date Windows port.
 
 #ifdef USE_LEVELDB

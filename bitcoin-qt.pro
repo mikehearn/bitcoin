@@ -73,7 +73,10 @@ contains(BITCOIN_NEED_QT_PLUGINS, 1) {
     QTPLUGIN += qcncodecs qjpcodecs qtwcodecs qkrcodecs qtaccessiblewidgets
 } 
 
-!windows:contains(USE_LEVELDB, 1) {
+windows || contains(USE_LEVELDB, 0) {
+    message(Building without LevelDB)
+    SOURCES += src/txdb-bdb.cpp
+} else {
     message(Building with LevelDB)
     DEFINES += USE_LEVELDB
     INCLUDEPATH += src/leveldb-1.5.0/include
@@ -84,9 +87,6 @@ contains(BITCOIN_NEED_QT_PLUGINS, 1) {
     genleveldb.depends = FORCE
     PRE_TARGETDEPS += $$PWD/src/leveldb-1.5.0/libleveldb.a
     QMAKE_EXTRA_TARGETS += genleveldb
-} else {
-    message(Building without LevelDB)
-    SOURCES += src/txdb-bdb.cpp
 }
 
 !windows {
