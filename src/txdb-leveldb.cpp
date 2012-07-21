@@ -556,7 +556,7 @@ LevelDBMigrationResult MaybeMigrateToLevelDB(LevelDBMigrationProgress &progress)
         boost::filesystem::path tmppath = GetDataDir() / tmpname;
         boost::filesystem::rename(blkpath, tmppath);
         printf("Migrating blk%04d.dat to leveldb\n", nFile);
-        file = fopen(tmppath.string().c_str(), "r");
+        file = fopen(tmppath.string().c_str(), "rb");
         if (nFile == 1) {
             // This will create a fresh blk0001.dat ready for usage.
             LoadBlockIndex();
