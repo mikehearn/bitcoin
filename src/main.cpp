@@ -83,13 +83,15 @@ static bool SanityCheckMessage(CNode* peer, const CNetMessage& msg);
 
 /**
  * Returns true if there are nRequired or more blocks with a version that matches
- * versionBitMask in the last Consensus::Params::nMajorityWindow blocks,
+ * versionOrBitmask in the last Consensus::Params::nMajorityWindow blocks,
  * starting at pstart and going backwards.
+ *
  * A bitmask is used to be compatible with Pieter Wuille's "Version bits"
  * proposal, so it is possible for multiple forks to be in-progress
- * at the same time.
+ * at the same time. A simple >= version field is used for forks that
+ * predate this proposal.
  */
-static bool IsSuperMajority(int versionBitmask, const CBlockIndex* pstart, unsigned nRequired, const Consensus::Params& consensusParams);
+static bool IsSuperMajority(int versionOrBitmask, const CBlockIndex* pstart, unsigned nRequired, const Consensus::Params& consensusParams, bool useBitMask = true);
 static void CheckBlockIndex();
 
 /** Constant stuff for coinbase transactions we create: */
@@ -1787,6 +1789,12 @@ static int64_t nTimeIndex = 0;
 static int64_t nTimeCallbacks = 0;
 static int64_t nTimeTotal = 0;
 
+static bool DidBlockTriggerSizeFork(const CBlock &block, const CBlockIndex *pindex, const CChainParams &chainparams) {
+    return (block.nVersion & SIZE_FORK_VERSION) &&
+           (pblocktree->ForkActivated(SIZE_FORK_VERSION) == uint256()) &&
+           IsSuperMajority(SIZE_FORK_VERSION, pindex, chainparams.GetConsensus().ActivateSizeForkMajority(), chainparams.GetConsensus(), true /* use bitmask */);
+}
+
 bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pindex, CCoinsViewCache& view, bool fJustCheck)
 {
     const CChainParams& chainparams = Params();
@@ -1955,11 +1963,7 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
     int64_t nTime4 = GetTimeMicros(); nTimeCallbacks += nTime4 - nTime3;
     LogPrint("bench", "    - Callbacks: %.2fms [%.2fs]\n", 0.001 * (nTime4 - nTime3), nTimeCallbacks * 0.000001);
 
-    // See if this block triggered activation of the max block size fork:
-    if ((block.nVersion & SIZE_FORK_VERSION) && 
-        (pblocktree->ForkActivated(SIZE_FORK_VERSION) == uint256()) &&
-        IsSuperMajority(SIZE_FORK_VERSION, pindex, chainparams.GetConsensus().ActivateSizeForkMajority(), chainparams.GetConsensus())) {
-
+    if (DidBlockTriggerSizeFork(block, pindex, chainparams)) {
         uint64_t tAllowBigger = block.nTime + chainparams.GetConsensus().SizeForkGracePeriod();
         LogPrintf("%s: Max block size fork activating at time %d, bigger blocks allowed at time %d\n",
                   __func__, block.nTime, tAllowBigger);
@@ -2927,12 +2931,13 @@ bool AcceptBlock(CBlock& block, CValidationState& state, CBlockIndex** ppindex, 
     return true;
 }
 
-static bool IsSuperMajority(int versionBitmask, const CBlockIndex* pstart, unsigned nRequired, const Consensus::Params& consensusParams)
+static bool IsSuperMajority(int versionOrBitmask, const CBlockIndex* pstart, unsigned nRequired, const Consensus::Params& consensusParams, bool useBitMask)
 {
     unsigned int nFound = 0;
     for (int i = 0; i < consensusParams.nMajorityWindow && nFound < nRequired && pstart != NULL; i++)
     {
-        if ( (pstart->nVersion & versionBitmask) == versionBitmask)
+        if ((useBitMask && ((pstart->nVersion & versionOrBitmask) == versionOrBitmask)) ||
+            (!useBitMask && (pstart->nVersion >= versionOrBitmask)))
             ++nFound;
         pstart = pstart->pprev;
     }
